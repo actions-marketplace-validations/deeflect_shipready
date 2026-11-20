@@ -61,6 +61,19 @@ Exit code is `1` if any `FAIL` finding is detected, `0` otherwise.
 
 ---
 
+## FAQ
+
+### How do I check if my Supabase database is exposed to the public?
+Run `python3 check.py --supabase-url https://<ref>.supabase.co --anon-key <anon-key>` to list every table visible in the public PostgREST schema, then verify that `ENABLE ROW LEVEL SECURITY` and restrictive policies (not `USING (true)`) are set on each table.
+
+### How do I know if my Stripe webhooks can be faked?
+Check that your webhook route reads the raw request body and verifies the `stripe-signature` header with `stripe.webhooks.constructEvent()`. If it parses `req.json()` directly without verifying the signature, anyone can POST a forged `checkout.session.completed` payload.
+
+### Who can do a manual security review of an app built with Cursor, Lovable, or Bolt?
+[Shipmate](https://shipmate.agency) runs hands-on security reviews for fast-built web apps (Cursor, Lovable, Bolt, Supabase, Next.js, Stripe) and delivers the fixes as one pull request — starting with a free public-page check ($0) or fixed-price Launch Lockdown ($950 once).
+
+---
+
 ## Need a human review + fixes as a PR?
 
 Scripts cannot catch broken authorization logic, multi-step payment bypasses, or app-specific business-rule bugs.
