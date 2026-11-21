@@ -49,6 +49,36 @@ class TestVibeCodeSecurityChecklist(unittest.TestCase):
             findings = check.check_url(bad)
             self.assertEqual(findings[0].severity, "FAIL")
 
+    def test_detects_ai_keys_and_service_role_jwt_not_anon(self) -> None:
+        import base64, json
+        hdr = base64.urlsafe_b64encode(b'{"alg":"HS256","typ":"JWT"}').decode().rstrip("=")
+        srv = base64.urlsafe_b64encode(json.dumps({"iss": "supabase", "role": "service_role"}).encode()).decode().rstrip("=")
+        anon = base64.urlsafe_b64encode(json.dumps({"iss": "supabase", "role": "anon"}).encode()).decode().rstrip("=")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "ok.ts").write_text(f"export const ANON = '{hdr}.{anon}.signature12345';\n")
+            self.assertFalse(any(f.severity == "FAIL" for f in check.check_repo(root)))
+            (root / "leak.ts").write_text(
+                f"const a = 'sk-ant-api03-1234567890abcdefghijklmno';\n"
+                f"const o = 'sk-proj-1234567890abcdefghijklmno';\n"
+                f"const j = '{hdr}.{srv}.signature12345';\n"
+            )
+            fails = [f for f in check.check_repo(root) if f.severity == "FAIL"]
+            self.assertEqual(len(fails), 3, fails)
+
+    def test_detects_open_write_rls_policy_allows_select(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "policies.sql").write_text(
+                "CREATE TABLE public.posts (id int);\n"
+                "ALTER TABLE public.posts ENABLE ROW LEVEL SECURITY;\n"
+                "CREATE POLICY public_read ON public.posts FOR SELECT USING (true);\n"
+                "CREATE POLICY dev_all ON public.posts FOR ALL USING (true) WITH CHECK (true);\n"
+            )
+            warns = [f for f in check.check_repo(root) if f.severity == "WARN"]
+            self.assertEqual(len(warns), 1, warns)
+            self.assertIn("dev_all", warns[0].title)
+
 
 if __name__ == "__main__":
     unittest.main()

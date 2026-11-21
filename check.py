@@ -10,6 +10,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import base64
 import ipaddress
 import json
 import os
@@ -66,15 +67,36 @@ CLIENT_SECRET_ENV_RE = re.compile(
 HARDCODED_SECRET_PATTERNS = [
     ("Stripe live secret key", re.compile(r"\bsk_live_[A-Za-z0-9]{16,}\b")),
     ("Stripe webhook secret", re.compile(r"\bwhsec_[A-Za-z0-9]{16,}\b")),
+    ("OpenAI API key", re.compile(r"\bsk-(?:proj|svcacct)-[A-Za-z0-9_-]{20,}\b")),
+    ("Anthropic API key", re.compile(r"\bsk-ant-api\d{2}-[A-Za-z0-9_-]{20,}\b")),
+    ("Supabase secret key", re.compile(r"\bsb_secret_[A-Za-z0-9_-]{20,}\b")),
     ("AWS access key ID", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
     ("GitHub personal access token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b")),
     ("Private key block", re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----")),
 ]
 
+JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.(eyJ[A-Za-z0-9_-]{16,})\.[A-Za-z0-9_-]{10,}\b")
+
 CREATE_TABLE_RE = re.compile(r"create\s+table\s+(?:if\s+not\s+exists\s+)?([a-zA-Z0-9_.\"`]+)", re.I)
 ENABLE_RLS_RE = re.compile(r"alter\s+table\s+(?:only\s+)?([a-zA-Z0-9_.\"`]+)\s+enable\s+row\s+level\s+security", re.I)
+CREATE_POLICY_RE = re.compile(r"create\s+policy\s+([^;]+);", re.I | re.S)
+POLICY_READONLY_RE = re.compile(r"\bfor\s+select\b", re.I)
+POLICY_OPEN_TRUE_RE = re.compile(r"\b(?:using|with\s+check)\s*\(\s*true\s*\)", re.I)
 STRIPE_WEBHOOK_HINT_RE = re.compile(r"stripe.*webhook|webhook.*stripe|checkout\.session\.completed", re.I)
 STRIPE_SIG_CHECK_RE = re.compile(r"constructEvent|stripe-signature", re.I)
+
+
+def _has_service_role_jwt(text: str) -> bool:
+    for m in JWT_RE.finditer(text):
+        payload = m.group(1)
+        padded = payload + "=" * (-len(payload) % 4)
+        try:
+            data = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8", "ignore"))
+        except Exception:
+            continue
+        if isinstance(data, dict) and data.get("role") == "service_role":
+            return True
+    return False
 
 
 @dataclass
@@ -153,6 +175,17 @@ def check_repo(repo_path: Path) -> list[Finding]:
                                 rel,
                             )
                         )
+                if _has_service_role_jwt(text):
+                    hardcoded_hits += 1
+                    findings.append(
+                        Finding(
+                            "secrets",
+                            "FAIL",
+                            "Hardcoded Supabase service_role JWT detected",
+                            "service_role bypasses all Row Level Security. Keep it strictly server-side and rotate it.",
+                            rel,
+                        )
+                    )
 
         # Stripe webhook verification check
         if path.suffix.lower() in {".ts", ".tsx", ".js", ".jsx", ".mjs", ".py"} and not is_test:
@@ -177,6 +210,19 @@ def check_repo(repo_path: Path) -> list[Finding]:
             for m in ENABLE_RLS_RE.finditer(text):
                 tbl = m.group(1).strip('"`').lower().split(".")[-1]
                 tables_with_rls.add(tbl)
+            for m in CREATE_POLICY_RE.finditer(text):
+                stmt = m.group(1)
+                if POLICY_OPEN_TRUE_RE.search(stmt) and not POLICY_READONLY_RE.search(stmt):
+                    policy_name = stmt.strip().splitlines()[0].split()[0].strip('"`')
+                    findings.append(
+                        Finding(
+                            "database",
+                            "WARN",
+                            f"Permissive write RLS policy `{policy_name}` uses USING/WITH CHECK (true)",
+                            "Scope write policies (ALL/INSERT/UPDATE/DELETE) to auth.uid() or a verified role.",
+                            rel,
+                        )
+                    )
 
     missing_rls = sorted(set(tables_created) - tables_with_rls)
     for tbl in missing_rls:

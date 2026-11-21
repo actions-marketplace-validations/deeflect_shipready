@@ -9,17 +9,21 @@ Automated scans catch obvious leaks; a human still has to test authorization log
 Requires Python 3.10+. No third-party packages needed.
 
 ```bash
-# 1. Scan a local repo for client-exposed secrets, missing RLS, and unverified Stripe webhooks
-python3 check.py --repo /path/to/your-app
+# Run directly with uvx (or pip install vibe-code-security-checklist)
+uvx vibe-code-security-checklist --repo /path/to/your-app
+
+# 1. Scan a local repo for client-exposed secrets, hardcoded AI/Stripe/Supabase keys,
+#    missing RLS, USING (true) write policies, and unverified Stripe webhooks
+vibe-code-check --repo /path/to/your-app
 
 # 2. Check security headers and dotfile exposure on a live staging/prod URL (read-only)
-python3 check.py --url https://yourapp.com
+vibe-code-check --url https://yourapp.com
 
 # 3. Check which Supabase tables are exposed to the public anon key (read-only)
-python3 check.py --supabase-url https://<project-ref>.supabase.co --anon-key <anon-key>
+vibe-code-check --supabase-url https://<project-ref>.supabase.co --anon-key <anon-key>
 
-# Machine-readable output for CI
-python3 check.py --repo . --json
+# Machine-readable output for CI (also works standalone via `python3 check.py`)
+vibe-code-check --repo . --json
 ```
 
 Exit code is `1` if any `FAIL` finding is detected, `0` otherwise.
