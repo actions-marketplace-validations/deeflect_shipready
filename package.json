@@ -17,9 +17,9 @@
   "homepage": "https://shipmate.agency",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/deeflect/vibe-code-security-checklist.git"
+    "url": "git+https://github.com/deeflect/shipready.git"
   },
-  "bugs": "https://github.com/deeflect/vibe-code-security-checklist/issues",
+  "bugs": "https://github.com/deeflect/shipready/issues",
   "author": "Dmitry (Dee) Kargaev <hi@deeflect.com>",
   "license": "MIT"
 }
