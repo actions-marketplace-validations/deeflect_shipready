@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Zero-dependency pre-launch security checker for Cursor, Lovable, Bolt, Next.js, Supabase & Stripe apps.
+"""ShipReady by Shipmate: zero-dependency pre-launch security checker for Cursor, Lovable, Bolt, Next.js, Supabase & Stripe apps.
 
 Usage:
+  python3 check.py check /path/to/app [--format text|json|sarif|md] [--fail-on high|medium|low|none]
+  python3 check.py url https://example.com
   python3 check.py --repo /path/to/app
   python3 check.py --url https://example.com
   python3 check.py --supabase-url https://xyz.supabase.co --anon-key eyJ...
+  python3 check.py --dump-rules > rules.json
 """
 
 from __future__ import annotations
@@ -23,6 +26,58 @@ import urllib.request
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable
+
+__version__ = "0.2.0"
+RULES_BASE_URL = "https://shipmate.agency/rules/"
+LOCKDOWN_LINE = "Want a person to fix these in one PR? https://shipmate.agency/lockdown"
+
+
+@dataclass(frozen=True)
+class Rule:
+    id: str
+    slug: str
+    severity: str  # high, medium, low
+    title: str
+
+    @property
+    def url(self) -> str:
+        return f"{RULES_BASE_URL}{self.slug}/"
+
+
+# IDs and slugs are permanent once published: rule pages and SARIF history depend on them.
+# SR-WEB-006 (missing-permissions-policy) is reserved; the URL check does not look for that header yet.
+RULES = {
+    r.id: r
+    for r in [
+        Rule("SR-SUPA-001", "supabase-missing-rls", "medium", "SQL table created without Row Level Security"),
+        Rule("SR-SUPA-002", "supabase-policy-using-true", "medium", "Write policy allows everyone with USING (true)"),
+        Rule("SR-SUPA-003", "supabase-service-role-key-exposed", "high", "Supabase service_role key in source code"),
+        Rule("SR-SUPA-004", "supabase-public-schema-exposed", "medium", "Tables listed to the anon key in the public schema"),
+        Rule("SR-SEC-001", "secret-in-public-env-var", "high", "Server secret in a client-exposed env var"),
+        Rule("SR-SEC-002", "hardcoded-api-key", "high", "API key or private key hardcoded in source"),
+        Rule("SR-SEC-003", "env-file-not-gitignored", "medium", "Env file present and not in .gitignore"),
+        Rule("SR-PAY-001", "stripe-webhook-no-signature-check", "medium", "Stripe webhook handler without signature check"),
+        Rule("SR-WEB-001", "missing-csp", "medium", "Content-Security-Policy header missing"),
+        Rule("SR-WEB-002", "missing-hsts", "medium", "Strict-Transport-Security header missing"),
+        Rule("SR-WEB-003", "missing-x-frame-options", "low", "Clickjacking protection missing"),
+        Rule("SR-WEB-004", "missing-nosniff", "low", "X-Content-Type-Options: nosniff missing"),
+        Rule("SR-WEB-005", "missing-referrer-policy", "low", "Referrer-Policy header missing"),
+        Rule("SR-WEB-007", "exposed-dotfile", "high", "Env or git file served publicly"),
+    ]
+}
+SEVERITY_RANK = {"low": 1, "medium": 2, "high": 3}
+SARIF_LEVEL = {"high": "error", "medium": "warning", "low": "note"}
+SECURITY_SEVERITY = {"high": "8.0", "medium": "5.0", "low": "3.0"}
+
+
+def rules_json() -> str:
+    data = [{"id": r.id, "slug": r.slug, "severity": r.severity, "title": r.title, "url": r.url} for r in RULES.values()]
+    return json.dumps(data, indent=2) + "\n"
+
+
+def _line(text: str, pos: int) -> int:
+    return text.count("\n", 0, pos) + 1
+
 
 SKIP_DIRS = {
     ".git",
@@ -86,7 +141,8 @@ STRIPE_WEBHOOK_HINT_RE = re.compile(r"stripe.*webhook|webhook.*stripe|checkout\.
 STRIPE_SIG_CHECK_RE = re.compile(r"constructEvent|stripe-signature", re.I)
 
 
-def _has_service_role_jwt(text: str) -> bool:
+def _has_service_role_jwt(text: str) -> int:
+    """Line of the first service_role JWT, or 0."""
     for m in JWT_RE.finditer(text):
         payload = m.group(1)
         padded = payload + "=" * (-len(payload) % 4)
@@ -95,8 +151,8 @@ def _has_service_role_jwt(text: str) -> bool:
         except Exception:
             continue
         if isinstance(data, dict) and data.get("role") == "service_role":
-            return True
-    return False
+            return _line(text, m.start())
+    return 0
 
 
 @dataclass
@@ -106,6 +162,8 @@ class Finding:
     title: str
     detail: str
     location: str = ""
+    rule: str = ""  # RULES key; empty for PASS lines and scan errors
+    line: int = 0
 
 
 def iter_repo_files(root: Path) -> Iterable[Path]:
@@ -129,15 +187,15 @@ def check_repo(repo_path: Path) -> list[Finding]:
     for p in real_envs:
         rel = str(p.relative_to(repo_path))
         if rel.startswith("public/"):
-            findings.append(Finding("secrets", "FAIL", "Env file inside public/ directory", "Files in public/ are served over HTTP.", rel))
+            findings.append(Finding("secrets", "FAIL", "Env file inside public/ directory", "Files in public/ are served over HTTP.", rel, rule="SR-WEB-007"))
         elif ".env" not in gitignore:
-            findings.append(Finding("secrets", "WARN", "Env file present and .env not in .gitignore", "Add .env* to .gitignore and verify it is not tracked by git.", rel))
+            findings.append(Finding("secrets", "WARN", "Env file present and .env not in .gitignore", "Add .env* to .gitignore and verify it is not tracked by git.", rel, rule="SR-SEC-003"))
 
     # 2. Scan source files
     public_secret_hits = 0
     hardcoded_hits = 0
     unverified_webhooks = 0
-    tables_created: dict[str, str] = {}
+    tables_created: dict[str, tuple[str, int]] = {}
     tables_with_rls: set[str] = set()
 
     for path in iter_repo_files(repo_path):
@@ -159,12 +217,14 @@ def check_repo(repo_path: Path) -> list[Finding]:
                         f"Client-exposed secret env var: {match.group(0)}",
                         "Variables prefixed NEXT_PUBLIC_/VITE_/PUBLIC_ are bundled into client JS.",
                         rel,
+                        rule="SR-SEC-001",
+                        line=_line(text, match.start()),
                     )
                 )
 
             if not path.name.startswith(".env"):
                 for label, rx in HARDCODED_SECRET_PATTERNS:
-                    if rx.search(text):
+                    if m := rx.search(text):
                         hardcoded_hits += 1
                         findings.append(
                             Finding(
@@ -173,9 +233,11 @@ def check_repo(repo_path: Path) -> list[Finding]:
                                 f"Possible hardcoded {label}",
                                 "Move secrets to server-side environment variables and rotate if committed.",
                                 rel,
+                                rule="SR-SEC-002",
+                                line=_line(text, m.start()),
                             )
                         )
-                if _has_service_role_jwt(text):
+                if jwt_line := _has_service_role_jwt(text):
                     hardcoded_hits += 1
                     findings.append(
                         Finding(
@@ -184,6 +246,8 @@ def check_repo(repo_path: Path) -> list[Finding]:
                             "Hardcoded Supabase service_role JWT detected",
                             "service_role bypasses all Row Level Security. Keep it strictly server-side and rotate it.",
                             rel,
+                            rule="SR-SUPA-003",
+                            line=jwt_line,
                         )
                     )
 
@@ -199,6 +263,7 @@ def check_repo(repo_path: Path) -> list[Finding]:
                             "Stripe webhook handler may skip signature verification",
                             "Verify the `stripe-signature` header using `stripe.webhooks.constructEvent()` on the raw request body.",
                             rel,
+                            rule="SR-PAY-001",
                         )
                     )
 
@@ -206,7 +271,7 @@ def check_repo(repo_path: Path) -> list[Finding]:
         if path.suffix.lower() == ".sql":
             for m in CREATE_TABLE_RE.finditer(text):
                 tbl = m.group(1).strip('"`').lower().split(".")[-1]
-                tables_created[tbl] = rel
+                tables_created[tbl] = (rel, _line(text, m.start()))
             for m in ENABLE_RLS_RE.finditer(text):
                 tbl = m.group(1).strip('"`').lower().split(".")[-1]
                 tables_with_rls.add(tbl)
@@ -221,6 +286,8 @@ def check_repo(repo_path: Path) -> list[Finding]:
                             f"Permissive write RLS policy `{policy_name}` uses USING/WITH CHECK (true)",
                             "Scope write policies (ALL/INSERT/UPDATE/DELETE) to auth.uid() or a verified role.",
                             rel,
+                            rule="SR-SUPA-002",
+                            line=_line(text, m.start()),
                         )
                     )
 
@@ -232,7 +299,9 @@ def check_repo(repo_path: Path) -> list[Finding]:
                 "WARN",
                 f"SQL table `{tbl}` has no ENABLE ROW LEVEL SECURITY statement",
                 "In Supabase, tables exposed in the public schema without RLS can be read or modified with the anon key.",
-                tables_created[tbl],
+                tables_created[tbl][0],
+                rule="SR-SUPA-001",
+                line=tables_created[tbl][1],
             )
         )
 
@@ -295,21 +364,21 @@ def check_url(url: str) -> list[Finding]:
         findings.append(Finding("headers", "WARN", f"Homepage returned HTTP {status}", "Verify the target URL.", base))
 
     required = [
-        ("strict-transport-security", "HSTS missing", "Add Strict-Transport-Security: max-age=31536000; includeSubDomains."),
-        ("content-security-policy", "CSP missing", "Add a Content-Security-Policy header to limit XSS and script injection."),
-        ("x-content-type-options", "X-Content-Type-Options missing", "Set X-Content-Type-Options: nosniff."),
-        ("referrer-policy", "Referrer-Policy missing", "Set Referrer-Policy: strict-origin-when-cross-origin."),
+        ("strict-transport-security", "HSTS missing", "Add Strict-Transport-Security: max-age=31536000; includeSubDomains.", "SR-WEB-002"),
+        ("content-security-policy", "CSP missing", "Add a Content-Security-Policy header to limit XSS and script injection.", "SR-WEB-001"),
+        ("x-content-type-options", "X-Content-Type-Options missing", "Set X-Content-Type-Options: nosniff.", "SR-WEB-004"),
+        ("referrer-policy", "Referrer-Policy missing", "Set Referrer-Policy: strict-origin-when-cross-origin.", "SR-WEB-005"),
     ]
     missing_count = 0
-    for key, title, detail in required:
+    for key, title, detail, rule in required:
         if key not in hdrs:
             missing_count += 1
-            findings.append(Finding("headers", "WARN", title, detail, base))
+            findings.append(Finding("headers", "WARN", title, detail, base, rule=rule))
 
     has_frame_guard = "x-frame-options" in hdrs or "frame-ancestors" in hdrs.get("content-security-policy", "").lower()
     if not has_frame_guard:
         missing_count += 1
-        findings.append(Finding("headers", "WARN", "Clickjacking protection missing", "Set X-Frame-Options: DENY or CSP frame-ancestors.", base))
+        findings.append(Finding("headers", "WARN", "Clickjacking protection missing", "Set X-Frame-Options: DENY or CSP frame-ancestors.", base, rule="SR-WEB-003"))
 
     if missing_count == 0:
         findings.append(Finding("headers", "PASS", "Core security headers present", "HSTS, CSP, nosniff, referrer-policy, and framing protection found.", base))
@@ -322,7 +391,7 @@ def check_url(url: str) -> list[Finding]:
             ctype = c_hdrs.get("content-type", "")
             if code == 200 and "text/html" not in ctype and marker in body:
                 exposed.append(path)
-                findings.append(Finding("exposure", "FAIL", f"Sensitive file exposed at {path}", "Block public access immediately and rotate any exposed credentials.", base + path))
+                findings.append(Finding("exposure", "FAIL", f"Sensitive file exposed at {path}", "Block public access immediately and rotate any exposed credentials.", base + path, rule="SR-WEB-007"))
         except Exception:
             continue
     if not exposed:
@@ -362,19 +431,151 @@ def check_supabase(supabase_url: str, anon_key: str) -> list[Finding]:
                 f"{len(paths)} tables listed in public PostgREST schema",
                 f"Tables visible to anon key: {preview}{suffix}. Verify Row Level Security (RLS) policies on every table.",
                 endpoint,
+                rule="SR-SUPA-004",
             )
         ]
     return [Finding("supabase", "PASS", "No tables exposed in public PostgREST schema", endpoint)]
 
 
+def _severity(f: Finding) -> str:
+    """Rule severity; a rule-less FAIL is a scan error and counts as high."""
+    if f.rule:
+        return RULES[f.rule].severity
+    return "high" if f.severity == "FAIL" else ""
+
+
+def _where(f: Finding) -> str:
+    return f"{f.location}:{f.line}" if f.line else f.location
+
+
+def format_text(findings: list[Finding]) -> str:
+    out = []
+    for f in findings:
+        rid = f" {f.rule}" if f.rule else ""
+        loc = f" ({_where(f)})" if f.location else ""
+        out.append(f"[{f.severity:4s}] [{f.area}]{rid} {f.title}{loc}")
+        if f.detail:
+            out.append(f"       {f.detail}")
+    hit = dict.fromkeys(f.rule for f in findings if f.rule)
+    if hit:
+        out += ["", "Rule docs:"] + [f"  {rid}  {RULES[rid].url}" for rid in hit] + ["", LOCKDOWN_LINE]
+    return "\n".join(out)
+
+
+def _sarif_uri(f: Finding, base: Path | None) -> str:
+    if base is None or f.location.startswith(("http://", "https://")):
+        return f.location
+    rel = os.path.relpath(base / f.location)  # relative to cwd, so the Action's paths match the checkout
+    return Path(rel).as_posix() if not rel.startswith("..") else (base / f.location).resolve().as_uri()
+
+
+def format_sarif(findings: list[Finding], base: Path | None = None) -> str:
+    rule_ids = list(RULES)
+    results, notes = [], []
+    for f in findings:
+        if f.rule:
+            region = {"region": {"startLine": f.line}} if f.line else {}
+            results.append(
+                {
+                    "ruleId": f.rule,
+                    "ruleIndex": rule_ids.index(f.rule),
+                    "level": SARIF_LEVEL[RULES[f.rule].severity],
+                    "message": {"text": f"{f.title}. {f.detail}".strip()},
+                    "locations": [{"physicalLocation": {"artifactLocation": {"uri": _sarif_uri(f, base)}, **region}}],
+                }
+            )
+        elif f.severity != "PASS":
+            notes.append({"level": "error" if f.severity == "FAIL" else "warning", "message": {"text": f"{f.title}: {f.detail} {f.location}".strip()}})
+    driver_rules = [
+        {
+            "id": r.id,
+            "name": r.slug,
+            "shortDescription": {"text": r.title},
+            "fullDescription": {"text": r.title},
+            "helpUri": r.url,
+            "help": {"text": f"{r.title}. Fix: {r.url}", "markdown": f"{r.title}. [How to fix]({r.url})"},
+            "defaultConfiguration": {"level": SARIF_LEVEL[r.severity]},
+            "properties": {"tags": ["security"], "security-severity": SECURITY_SEVERITY[r.severity]},
+        }
+        for r in RULES.values()
+    ]
+    sarif = {
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [
+            {
+                "tool": {
+                    "driver": {
+                        "name": "ShipReady",
+                        "fullName": "ShipReady by Shipmate",
+                        "version": __version__,
+                        "semanticVersion": __version__,
+                        "informationUri": RULES_BASE_URL,
+                        "rules": driver_rules,
+                    }
+                },
+                "invocations": [{"executionSuccessful": not any(n["level"] == "error" for n in notes), "toolExecutionNotifications": notes}],
+                "results": results,
+            }
+        ],
+    }
+    return json.dumps(sarif, indent=2)
+
+
+def format_md(findings: list[Finding]) -> str:
+    issues = sorted((f for f in findings if f.rule), key=lambda f: -SEVERITY_RANK[_severity(f)])
+    errors = [f for f in findings if not f.rule and f.severity != "PASS"]
+    out = ["<!-- shipready -->", "## ShipReady by Shipmate", ""]
+    if issues:
+        counts = {s: sum(_severity(f) == s for f in issues) for s in ("high", "medium", "low")}
+        out.append(f"{len(issues)} findings: {counts['high']} high, {counts['medium']} medium, {counts['low']} low.")
+        out += ["", "| Severity | Rule | Finding | Location |", "|---|---|---|---|"]
+        for f in issues:
+            r = RULES[f.rule]
+            cells = [r.severity, f"[{r.id}]({r.url})", f.title, f"`{_where(f)}`"]
+            out.append("| " + " | ".join(c.replace("|", "\\|") for c in cells) + " |")
+    else:
+        out.append("No issues found.")
+    for f in errors:
+        out += ["", f"Could not complete a check: {f.title}. {f.detail}"]
+    if issues:
+        out += ["", LOCKDOWN_LINE]
+    return "\n".join(out)
+
+
+def _output_args(p: argparse.ArgumentParser, top: bool) -> None:
+    # Subparser copies use SUPPRESS so they never overwrite a value given before the subcommand.
+    default = None if top else argparse.SUPPRESS
+    p.add_argument("--format", choices=["text", "json", "sarif", "md"], default=default, help="Output format (default text).")
+    p.add_argument("--fail-on", choices=["high", "medium", "low", "none"], default=default, help="Exit 1 when a finding is at or above this severity (default high).")
+    p.add_argument("--json", action="store_true", default=False if top else argparse.SUPPRESS, help="Same as --format json.")
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Pre-launch security checker for AI-built web apps.")
+    parser = argparse.ArgumentParser(prog="shipready", description="ShipReady by Shipmate: pre-launch security checker for AI-built web apps.")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--repo", type=Path, help="Local repository path to scan statically.")
     parser.add_argument("--url", help="Public HTTPS URL to check headers and dotfile exposure (read-only).")
     parser.add_argument("--supabase-url", help="Supabase project URL (https://<ref>.supabase.co) for read-only schema check.")
     parser.add_argument("--anon-key", help="Supabase anon key (used with --supabase-url).")
-    parser.add_argument("--json", action="store_true", help="Output JSON.")
+    parser.add_argument("--dump-rules", action="store_true", help="Print the rule registry as JSON (the source of rules.json).")
+    _output_args(parser, top=True)
+    sub = parser.add_subparsers(dest="cmd")
+    p_check = sub.add_parser("check", help="Scan a local repository.")
+    p_check.add_argument("path", type=Path, nargs="?", default=Path("."))
+    _output_args(p_check, top=False)
+    p_url = sub.add_parser("url", help="Check headers and dotfile exposure of a site you run (read-only).")
+    p_url.add_argument("target")
+    _output_args(p_url, top=False)
     args = parser.parse_args(argv)
+
+    if args.dump_rules:
+        sys.stdout.write(rules_json())
+        return 0
+    if args.cmd == "check":
+        args.repo = args.path
+    elif args.cmd == "url":
+        args.url = args.target
 
     if not args.repo and not args.url and not args.supabase_url:
         parser.print_help()
@@ -391,16 +592,20 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         findings.extend(check_supabase(args.supabase_url, args.anon_key))
 
-    if args.json:
+    fmt = args.format or ("json" if args.json else "text")
+    if fmt == "json":
         print(json.dumps([asdict(f) for f in findings], indent=2))
+    elif fmt == "sarif":
+        print(format_sarif(findings, args.repo))
+    elif fmt == "md":
+        print(format_md(findings))
     else:
-        for f in findings:
-            loc = f" ({f.location})" if f.location else ""
-            print(f"[{f.severity:4s}] [{f.area}] {f.title}{loc}")
-            if f.detail:
-                print(f"       {f.detail}")
+        print(format_text(findings))
 
-    return 1 if any(f.severity == "FAIL" for f in findings) else 0
+    fail_on = args.fail_on or "high"
+    if fail_on == "none":
+        return 0
+    return 1 if any(SEVERITY_RANK.get(_severity(f), 0) >= SEVERITY_RANK[fail_on] for f in findings) else 0
 
 
 if __name__ == "__main__":

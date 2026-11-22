@@ -1,0 +1,100 @@
+[
+  {
+    "id": "SR-SUPA-001",
+    "slug": "supabase-missing-rls",
+    "severity": "medium",
+    "title": "SQL table created without Row Level Security",
+    "url": "https://shipmate.agency/rules/supabase-missing-rls/"
+  },
+  {
+    "id": "SR-SUPA-002",
+    "slug": "supabase-policy-using-true",
+    "severity": "medium",
+    "title": "Write policy allows everyone with USING (true)",
+    "url": "https://shipmate.agency/rules/supabase-policy-using-true/"
+  },
+  {
+    "id": "SR-SUPA-003",
+    "slug": "supabase-service-role-key-exposed",
+    "severity": "high",
+    "title": "Supabase service_role key in source code",
+    "url": "https://shipmate.agency/rules/supabase-service-role-key-exposed/"
+  },
+  {
+    "id": "SR-SUPA-004",
+    "slug": "supabase-public-schema-exposed",
+    "severity": "medium",
+    "title": "Tables listed to the anon key in the public schema",
+    "url": "https://shipmate.agency/rules/supabase-public-schema-exposed/"
+  },
+  {
+    "id": "SR-SEC-001",
+    "slug": "secret-in-public-env-var",
+    "severity": "high",
+    "title": "Server secret in a client-exposed env var",
+    "url": "https://shipmate.agency/rules/secret-in-public-env-var/"
+  },
+  {
+    "id": "SR-SEC-002",
+    "slug": "hardcoded-api-key",
+    "severity": "high",
+    "title": "API key or private key hardcoded in source",
+    "url": "https://shipmate.agency/rules/hardcoded-api-key/"
+  },
+  {
+    "id": "SR-SEC-003",
+    "slug": "env-file-not-gitignored",
+    "severity": "medium",
+    "title": "Env file present and not in .gitignore",
+    "url": "https://shipmate.agency/rules/env-file-not-gitignored/"
+  },
+  {
+    "id": "SR-PAY-001",
+    "slug": "stripe-webhook-no-signature-check",
+    "severity": "medium",
+    "title": "Stripe webhook handler without signature check",
+    "url": "https://shipmate.agency/rules/stripe-webhook-no-signature-check/"
+  },
+  {
+    "id": "SR-WEB-001",
+    "slug": "missing-csp",
+    "severity": "medium",
+    "title": "Content-Security-Policy header missing",
+    "url": "https://shipmate.agency/rules/missing-csp/"
+  },
+  {
+    "id": "SR-WEB-002",
+    "slug": "missing-hsts",
+    "severity": "medium",
+    "title": "Strict-Transport-Security header missing",
+    "url": "https://shipmate.agency/rules/missing-hsts/"
+  },
+  {
+    "id": "SR-WEB-003",
+    "slug": "missing-x-frame-options",
+    "severity": "low",
+    "title": "Clickjacking protection missing",
+    "url": "https://shipmate.agency/rules/missing-x-frame-options/"
+  },
+  {
+    "id": "SR-WEB-004",
+    "slug": "missing-nosniff",
+    "severity": "low",
+    "title": "X-Content-Type-Options: nosniff missing",
+    "url": "https://shipmate.agency/rules/missing-nosniff/"
+  },
+  {
+    "id": "SR-WEB-005",
+    "slug": "missing-referrer-policy",
+    "severity": "low",
+    "title": "Referrer-Policy header missing",
+    "url": "https://shipmate.agency/rules/missing-referrer-policy/"
+  },
+  {
+    "id": "SR-WEB-007",
+    "slug": "exposed-dotfile",
+    "severity": "high",
+    "title": "Env or git file served publicly",
+    "url": "https://shipmate.agency/rules/exposed-dotfile/"
+  }
+]

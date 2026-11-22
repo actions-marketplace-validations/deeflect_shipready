@@ -1,0 +1,25 @@
+{
+  "name": "@shipmate/shipready",
+  "version": "0.2.0",
+  "description": "ShipReady by Shipmate: zero-dependency pre-launch security check for Next.js, Supabase and Stripe apps.",
+  "bin": {
+    "shipready": "npm/shipready.js"
+  },
+  "files": [
+    "check.py",
+    "npm/shipready.js",
+    "rules.json"
+  ],
+  "engines": {
+    "node": ">=16"
+  },
+  "keywords": ["security", "supabase", "stripe", "nextjs", "lovable", "cursor", "bolt", "sarif", "cli"],
+  "homepage": "https://shipmate.agency",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/deeflect/vibe-code-security-checklist.git"
+  },
+  "bugs": "https://github.com/deeflect/vibe-code-security-checklist/issues",
+  "author": "Dmitry (Dee) Kargaev <hi@deeflect.com>",
+  "license": "MIT"
+}

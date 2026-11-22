@@ -1,0 +1,77 @@
+name: ShipReady by Shipmate
+description: Pre-launch security check for Next.js, Supabase and Stripe apps. Findings go to the GitHub Security tab.
+author: Shipmate
+branding:
+  icon: shield
+  color: green
+
+inputs:
+  path:
+    description: Folder to scan, relative to the repository root.
+    required: false
+    default: "."
+  fail-on:
+    description: Fail the job on findings at or above this severity (high, medium, low, none).
+    required: false
+    default: high
+  comment:
+    description: Post the findings as a comment on the pull request (needs pull-requests write permission).
+    required: false
+    default: "false"
+
+outputs:
+  sarif-file:
+    description: Path of the SARIF file that was uploaded.
+    value: ${{ steps.scan.outputs.sarif }}
+
+runs:
+  using: composite
+  steps:
+    - name: Run ShipReady
+      id: scan
+      shell: bash
+      env:
+        SCAN_PATH: ${{ inputs.path }}
+        FAIL_ON: ${{ inputs.fail-on }}
+      run: |
+        py="$(command -v python3 || command -v python)"
+        out="$RUNNER_TEMP/shipready.sarif"
+        set +e
+        "$py" "$GITHUB_ACTION_PATH/check.py" check "$SCAN_PATH" --format sarif --fail-on "$FAIL_ON" > "$out"
+        code=$?
+        set -e
+        "$py" "$GITHUB_ACTION_PATH/check.py" check "$SCAN_PATH" --format md --fail-on none > "$RUNNER_TEMP/shipready.md"
+        echo "sarif=$out" >> "$GITHUB_OUTPUT"
+        echo "code=$code" >> "$GITHUB_OUTPUT"
+
+    - name: Upload SARIF
+      if: always() && steps.scan.outputs.sarif != ''
+      uses: github/codeql-action/upload-sarif@v4
+      with:
+        sarif_file: ${{ steps.scan.outputs.sarif }}
+        category: shipready
+
+    - name: Comment on pull request
+      if: always() && inputs.comment == 'true' && github.event.pull_request
+      uses: actions/github-script@v9
+      env:
+        BODY_FILE: ${{ runner.temp }}/shipready.md
+      with:
+        script: |
+          const body = require('fs').readFileSync(process.env.BODY_FILE, 'utf8');
+          const marker = '<!-- shipready -->';
+          const { owner, repo } = context.repo;
+          const issue_number = context.payload.pull_request.number;
+          try {
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number });
+            const old = comments.find(c => c.body && c.body.startsWith(marker));
+            if (old) await github.rest.issues.updateComment({ owner, repo, comment_id: old.id, body });
+            else await github.rest.issues.createComment({ owner, repo, issue_number, body });
+          } catch (e) {
+            core.warning(`ShipReady could not comment on the PR: ${e.message}`);
+          }
+
+    - name: Apply fail-on
+      if: always()
+      shell: bash
+      run: exit "${{ steps.scan.outputs.code || 1 }}"

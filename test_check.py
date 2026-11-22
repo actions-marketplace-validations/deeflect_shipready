@@ -1,8 +1,80 @@
+import base64
+import contextlib
+import io
+import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import check
+
+_HDR = base64.urlsafe_b64encode(b'{"alg":"HS256","typ":"JWT"}').decode().rstrip("=")
+_SRV = base64.urlsafe_b64encode(json.dumps({"iss": "supabase", "role": "service_role"}).encode()).decode().rstrip("=")
+
+# One minimal repo per repo-level rule: {rule_id: {relative_path: content}}
+REPO_FIXTURES = {
+    "SR-SUPA-001": {"001_init.sql": "-- init\nCREATE TABLE public.invoices (id int);\n"},
+    "SR-SUPA-002": {
+        "p.sql": "CREATE TABLE t (id int);\nALTER TABLE t ENABLE ROW LEVEL SECURITY;\nCREATE POLICY w ON t FOR ALL USING (true);\n"
+    },
+    "SR-SUPA-003": {"admin.ts": f"\nconst j = '{_HDR}.{_SRV}.signature12345';\n"},
+    "SR-SEC-001": {"client.ts": "// x\nconst k = process.env.NEXT_PUBLIC_STRIPE_SECRET_KEY;\n"},
+    "SR-SEC-002": {"aws.ts": "const id = 'AKIAIOSFODNN7EXAMPLE';\n"},
+    "SR-SEC-003": {".env": "A=1\n"},
+    "SR-PAY-001": {"stripe_webhook.ts": "if (body.type === 'checkout.session.completed') unlock();\n"},
+    "SR-WEB-007": {"public/.env": "A=1\n"},
+}
+REPO_FIXTURE_LINES = {"SR-SUPA-001": 2, "SR-SUPA-002": 3, "SR-SUPA-003": 2, "SR-SEC-001": 2, "SR-SEC-002": 1}
+
+# Headers a fully configured site sends; dropping one should raise exactly one rule.
+GOOD_HEADERS = {
+    "strict-transport-security": "max-age=31536000",
+    "content-security-policy": "default-src 'self'",
+    "x-content-type-options": "nosniff",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "x-frame-options": "DENY",
+}
+HEADER_FIXTURES = {
+    "SR-WEB-001": "content-security-policy",
+    "SR-WEB-002": "strict-transport-security",
+    "SR-WEB-003": "x-frame-options",
+    "SR-WEB-004": "x-content-type-options",
+    "SR-WEB-005": "referrer-policy",
+}
+
+
+def _write(root: Path, files: dict[str, str]) -> None:
+    for rel, content in files.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(content)
+
+
+def _fake_site(headers: dict[str, str], dotfiles: dict[str, str] | None = None):
+    """Stand-in for check._fetch: homepage returns `headers`, dotfile paths 404 unless listed."""
+
+    def fetch(url, **_kw):
+        for path, body in (dotfiles or {}).items():
+            if url.endswith(path):
+                return 200, {"content-type": "text/plain"}, body
+        if url.endswith(("/.env", "/.git/HEAD")):
+            return 404, {"content-type": "text/html"}, ""
+        return 200, dict(headers), "<html></html>"
+
+    return fetch
+
+
+@contextlib.contextmanager
+def _offline(fetch):
+    with mock.patch.object(check, "_assert_public_host", side_effect=lambda u: u.rstrip("/")), mock.patch.object(check, "_fetch", side_effect=fetch):
+        yield
+
+
+def _run(argv: list[str]) -> tuple[int, str]:
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        code = check.main(argv)
+    return code, buf.getvalue()
 
 
 class TestVibeCodeSecurityChecklist(unittest.TestCase):
@@ -78,6 +150,150 @@ class TestVibeCodeSecurityChecklist(unittest.TestCase):
             warns = [f for f in check.check_repo(root) if f.severity == "WARN"]
             self.assertEqual(len(warns), 1, warns)
             self.assertIn("dev_all", warns[0].title)
+
+
+class TestShipReadyRules(unittest.TestCase):
+    def test_every_rule_has_a_fixture(self) -> None:
+        covered = set(REPO_FIXTURES) | set(HEADER_FIXTURES) | {"SR-SUPA-004", "SR-WEB-007"}
+        self.assertEqual(covered, set(check.RULES))
+
+    def test_rules_json_matches_registry(self) -> None:
+        on_disk = (Path(__file__).parent / "rules.json").read_text()
+        self.assertEqual(on_disk, check.rules_json(), "regenerate with: python3 check.py --dump-rules > rules.json")
+        for r in json.loads(on_disk):
+            self.assertEqual(r["url"], f"https://shipmate.agency/rules/{r['slug']}/")
+            self.assertIn(r["severity"], {"high", "medium", "low"})
+
+    def test_repo_fixture_per_rule(self) -> None:
+        for rule_id, files in REPO_FIXTURES.items():
+            with self.subTest(rule_id), tempfile.TemporaryDirectory() as tmp:
+                _write(Path(tmp), files)
+                hits = [f for f in check.check_repo(Path(tmp)) if f.rule]
+                self.assertEqual({f.rule for f in hits}, {rule_id}, hits)
+                if rule_id in REPO_FIXTURE_LINES:
+                    self.assertEqual(hits[0].line, REPO_FIXTURE_LINES[rule_id])
+
+    def test_header_fixture_per_rule(self) -> None:
+        with _offline(_fake_site(GOOD_HEADERS)):
+            self.assertEqual([f.rule for f in check.check_url("https://example.com") if f.rule], [])
+        for rule_id, header in HEADER_FIXTURES.items():
+            with self.subTest(rule_id), _offline(_fake_site({k: v for k, v in GOOD_HEADERS.items() if k != header})):
+                self.assertEqual([f.rule for f in check.check_url("https://example.com") if f.rule], [rule_id])
+
+    def test_exposed_dotfile_over_http(self) -> None:
+        with _offline(_fake_site(GOOD_HEADERS, {"/.git/HEAD": "ref: refs/heads/main\n"})):
+            hits = [f for f in check.check_url("https://example.com") if f.rule]
+        self.assertEqual([(f.rule, f.location) for f in hits], [("SR-WEB-007", "https://example.com/.git/HEAD")])
+
+    def test_supabase_public_schema(self) -> None:
+        spec = json.dumps({"paths": {"/": {}, "/profiles": {}, "/rpc/fn": {}}})
+        with _offline(lambda url, **kw: (200, {}, spec)):
+            hits = check.check_supabase("https://abc.supabase.co", "anon")
+        self.assertEqual([f.rule for f in hits], ["SR-SUPA-004"])
+        self.assertIn("profiles", hits[0].detail)
+
+
+class TestShipReadyCli(unittest.TestCase):
+    def _repo(self, rule_id: str) -> tempfile.TemporaryDirectory:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        _write(Path(tmp.name), REPO_FIXTURES[rule_id])
+        return tmp.name
+
+    def test_sarif_structure(self) -> None:
+        root = self._repo("SR-SEC-001")
+        _write(Path(root), REPO_FIXTURES["SR-SUPA-001"])
+        code, out = _run(["check", root, "--format", "sarif"])
+        self.assertEqual(code, 1)
+        sarif = json.loads(out)
+        self.assertEqual(sarif["version"], "2.1.0")
+        self.assertIn("sarif-2.1.0", sarif["$schema"])
+        run = sarif["runs"][0]
+        driver = run["tool"]["driver"]
+        self.assertEqual(driver["name"], "ShipReady")
+        rule_ids = [r["id"] for r in driver["rules"]]
+        self.assertEqual(rule_ids, list(check.RULES))
+        for r in driver["rules"]:
+            self.assertEqual(r["helpUri"], check.RULES[r["id"]].url)
+            self.assertIn("text", r["shortDescription"])
+        self.assertEqual(len(run["results"]), 2)
+        for res in run["results"]:
+            self.assertIn(res["ruleId"], rule_ids)
+            self.assertEqual(rule_ids[res["ruleIndex"]], res["ruleId"])
+            self.assertIn(res["level"], {"error", "warning", "note"})
+            self.assertTrue(res["message"]["text"])
+            loc = res["locations"][0]["physicalLocation"]
+            self.assertTrue(loc["artifactLocation"]["uri"].endswith((".ts", ".sql")))
+            self.assertEqual(loc["region"]["startLine"], 2)
+        self.assertTrue(run["invocations"][0]["executionSuccessful"])
+
+    def test_sarif_scan_error_is_a_notification(self) -> None:
+        code, out = _run(["check", "/no/such/dir", "--format", "sarif"])
+        self.assertEqual(code, 1)
+        run = json.loads(out)["runs"][0]
+        self.assertEqual(run["results"], [])
+        self.assertFalse(run["invocations"][0]["executionSuccessful"])
+
+    def test_md_format(self) -> None:
+        code, out = _run(["check", self._repo("SR-SEC-001"), "--format", "md"])
+        self.assertEqual(code, 1)
+        self.assertTrue(out.startswith("<!-- shipready -->\n## ShipReady by Shipmate"))
+        self.assertIn("| Severity | Rule | Finding | Location |", out)
+        self.assertIn("[SR-SEC-001](https://shipmate.agency/rules/secret-in-public-env-var/)", out)
+        self.assertIn("`client.ts:2`", out)
+        self.assertIn(check.LOCKDOWN_LINE, out)
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertIn("No issues found.", _run(["check", tmp, "--format", "md"])[1])
+
+    def test_text_ends_with_rule_links_and_lockdown(self) -> None:
+        _, out = _run(["check", self._repo("SR-PAY-001")])
+        lines = out.rstrip("\n").splitlines()
+        self.assertEqual(lines[-1], check.LOCKDOWN_LINE)
+        self.assertIn("SR-PAY-001  https://shipmate.agency/rules/stripe-webhook-no-signature-check/", out)
+
+    def test_exit_codes_and_fail_on(self) -> None:
+        medium = self._repo("SR-SUPA-001")
+        high = self._repo("SR-SEC-002")
+        self.assertEqual(_run(["check", medium])[0], 0)
+        self.assertEqual(_run(["check", medium, "--fail-on", "medium"])[0], 1)
+        self.assertEqual(_run(["check", medium, "--fail-on", "low"])[0], 1)
+        self.assertEqual(_run(["check", high])[0], 1)
+        self.assertEqual(_run(["check", high, "--fail-on", "none"])[0], 0)
+        self.assertEqual(_run(["--fail-on", "none", "check", high])[0], 0)
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(_run(["check", tmp, "--fail-on", "low"])[0], 0)
+
+    def test_old_flags_still_work(self) -> None:
+        root = self._repo("SR-SEC-002")
+        code, out = _run(["--repo", root, "--json"])
+        self.assertEqual(code, 1)
+        data = json.loads(out)
+        self.assertEqual([d["rule"] for d in data if d["rule"]], ["SR-SEC-002"])
+        self.assertEqual(set(data[0]) >= {"area", "severity", "title", "detail", "location"}, True)
+        self.assertEqual(_run(["check", root, "--json"])[1], out)
+        with mock.patch("sys.stderr", io.StringIO()):
+            self.assertEqual(_run(["--supabase-url", "https://abc.supabase.co"])[0], 2)
+        with _offline(_fake_site(GOOD_HEADERS)):
+            self.assertEqual(_run(["--url", "https://example.com"])[0], 0)
+        self.assertEqual(_run([])[0], 2)
+
+    def test_url_subcommand_offline(self) -> None:
+        with _offline(_fake_site({})):
+            code, out = _run(["url", "https://example.com", "--format", "json"])
+        self.assertEqual(code, 0)  # missing headers are medium/low
+        rules = {d["rule"] for d in json.loads(out) if d["rule"]}
+        self.assertEqual(rules, set(HEADER_FIXTURES))
+
+    def test_url_subcommand_keeps_public_host_guard(self) -> None:
+        for bad in ["http://localhost:3000", "http://127.0.0.1:8080", "ftp://example.com"]:
+            with mock.patch.object(check, "_fetch", side_effect=AssertionError("must not fetch")):
+                code, out = _run(["url", bad])
+            self.assertEqual(code, 1, bad)
+            self.assertIn("Invalid or non-public target URL", out)
+
+    def test_dump_rules(self) -> None:
+        code, out = _run(["--dump-rules"])
+        self.assertEqual((code, out), (0, check.rules_json()))
 
 
 if __name__ == "__main__":
