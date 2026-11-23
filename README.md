@@ -12,7 +12,7 @@ Requires Python 3.10+. No third-party packages needed.
 
 ```bash
 # With Node installed (runs the same Python checker, needs Python 3.10+ on PATH)
-npx @shipmate/shipready check .
+npx @shipmate-agency/shipready check .
 
 # With uv
 uvx --from vibe-code-security-checklist shipready check .
