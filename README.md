@@ -1,4 +1,15 @@
+<p align="center">
+  <a href="https://shipmate.agency/rules/">
+    <img src="https://raw.githubusercontent.com/Shipmate-agency/.github/main/assets/shipmate-check-banner.png" alt="ShipReady by Shipmate — Pre-launch security CLI & GitHub Action for Next.js, Supabase, Stripe & AI apps" width="840" />
+  </a>
+</p>
+
 # ShipReady by Shipmate
+
+[![Website](https://img.shields.io/badge/Shipmate-shipmate.agency-1E57A8?style=flat-square)](https://shipmate.agency)
+[![Rule Docs](https://img.shields.io/badge/Rules-14_Checks-11141C?style=flat-square)](https://shipmate.agency/rules/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-11141C?style=flat-square)](./LICENSE)
+[![Org](https://img.shields.io/badge/GitHub-Shipmate--agency-11141C?style=flat-square)](https://github.com/Shipmate-agency)
 
 A pre-launch security checklist and a zero-dependency checker for web apps built fast with **Cursor, Lovable, Bolt, v0, Next.js, Supabase, and Stripe**.
 
