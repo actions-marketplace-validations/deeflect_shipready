@@ -22,8 +22,8 @@ classifiers = [
 
 [project.urls]
 Homepage = "https://shipmate.agency"
-Repository = "https://github.com/deeflect/shipready"
-Issues = "https://github.com/deeflect/shipready/issues"
+Repository = "https://github.com/Shipmate-agency/shipready"
+Issues = "https://github.com/Shipmate-agency/shipready/issues"
 
 [project.scripts]
 shipready = "vibe_code_security_checklist:main"

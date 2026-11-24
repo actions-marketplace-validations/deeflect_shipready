@@ -66,7 +66,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: deeflect/shipready@v0.2.0
+      - uses: Shipmate-agency/shipready@v0.2.0
         with:
           path: .
           fail-on: high
