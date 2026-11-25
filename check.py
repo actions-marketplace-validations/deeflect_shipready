@@ -134,7 +134,7 @@ HARDCODED_SECRET_PATTERNS = [
 JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.(eyJ[A-Za-z0-9_-]{16,})\.[A-Za-z0-9_-]{10,}\b")
 
 CREATE_TABLE_RE = re.compile(r"create\s+table\s+(?:if\s+not\s+exists\s+)?([a-zA-Z0-9_.\"`]+)", re.I)
-ENABLE_RLS_RE = re.compile(r"alter\s+table\s+(?:only\s+)?([a-zA-Z0-9_.\"`]+)\s+enable\s+row\s+level\s+security", re.I)
+ENABLE_RLS_RE = re.compile(r"alter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?([a-zA-Z0-9_.\"`]+)\s+enable\s+row\s+level\s+security", re.I)
 CREATE_POLICY_RE = re.compile(r"create\s+policy\s+([^;]+);", re.I | re.S)
 POLICY_READONLY_RE = re.compile(r"\bfor\s+select\b", re.I)
 POLICY_OPEN_TRUE_RE = re.compile(r"\b(?:using|with\s+check)\s*\(\s*true\s*\)", re.I)
@@ -284,10 +284,10 @@ def check_repo(repo_path: Path) -> list[Finding]:
         # Supabase / Postgres SQL RLS check
         if path.suffix.lower() == ".sql":
             for m in CREATE_TABLE_RE.finditer(text):
-                tbl = m.group(1).strip('"`').lower().split(".")[-1]
+                tbl = re.sub(r'["`]', "", m.group(1)).lower().split(".")[-1]
                 tables_created[tbl] = (rel, _line(text, m.start()))
             for m in ENABLE_RLS_RE.finditer(text):
-                tbl = m.group(1).strip('"`').lower().split(".")[-1]
+                tbl = re.sub(r'["`]', "", m.group(1)).lower().split(".")[-1]
                 tables_with_rls.add(tbl)
             for m in CREATE_POLICY_RE.finditer(text):
                 stmt = m.group(1)

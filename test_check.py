@@ -198,6 +198,19 @@ class TestVibeCodeSecurityChecklist(unittest.TestCase):
             hits = sorted(f.location for f in check.check_repo(root) if f.rule == "SR-SEC-001")
         self.assertEqual(hits, ["contest.ts", "inspector.tsx", "latest-posts.ts"])
 
+    def test_quoted_identifiers_and_alter_if_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "dump.sql").write_text(
+                'CREATE TABLE IF NOT EXISTS "public"."profiles" (id int);\n'
+                'ALTER TABLE "public"."profiles" ENABLE ROW LEVEL SECURITY;\n'
+                "CREATE TABLE public.notes (id int);\n"
+                "ALTER TABLE IF EXISTS ONLY public.notes ENABLE ROW LEVEL SECURITY;\n"
+                'CREATE TABLE "public"."invoices" (id int);\n'
+            )
+            hits = [f.title for f in check.check_repo(root) if f.rule == "SR-SUPA-001"]
+        self.assertEqual(hits, ["SQL table `invoices` has no ENABLE ROW LEVEL SECURITY statement"])
+
 
 class TestShipReadyRules(unittest.TestCase):
     def test_every_rule_has_a_fixture(self) -> None:
