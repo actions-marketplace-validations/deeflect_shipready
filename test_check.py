@@ -167,6 +167,16 @@ class TestVibeCodeSecurityChecklist(unittest.TestCase):
                 hits = sorted(f.location for f in check.check_repo(root) if f.rule == "SR-SEC-003")
                 self.assertEqual(hits, expected)
 
+    def test_ai_provider_key_in_public_env_var(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "chat.tsx").write_text(
+                "const a = process.env.NEXT_PUBLIC_OPENAI_API_KEY;\n"
+                "const b = import.meta.env.VITE_ANTHROPIC_API_KEY;\n"
+                "const ok = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY + process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;\n"
+            )
+            self.assertEqual([f.line for f in check.check_repo(root) if f.rule == "SR-SEC-001"], [1, 2])
+
 
 class TestShipReadyRules(unittest.TestCase):
     def test_every_rule_has_a_fixture(self) -> None:
