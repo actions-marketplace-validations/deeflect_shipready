@@ -211,6 +211,17 @@ class TestVibeCodeSecurityChecklist(unittest.TestCase):
             hits = [f.title for f in check.check_repo(root) if f.rule == "SR-SUPA-001"]
         self.assertEqual(hits, ["SQL table `invoices` has no ENABLE ROW LEVEL SECURITY statement"])
 
+    def test_open_policy_name_and_service_role_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "p.sql").write_text(
+                "CREATE TABLE t (id int);\nALTER TABLE t ENABLE ROW LEVEL SECURITY;\n"
+                'create policy "Service role full access" on t for all to service_role using (true) with check (true);\n'
+                'create policy "Anyone can update" on t for update to anon, service_role using (true);\n'
+            )
+            hits = [f.title for f in check.check_repo(root) if f.rule == "SR-SUPA-002"]
+        self.assertEqual(hits, ["Permissive write RLS policy `Anyone can update` uses USING/WITH CHECK (true)"])
+
 
 class TestShipReadyRules(unittest.TestCase):
     def test_every_rule_has_a_fixture(self) -> None:

@@ -137,7 +137,9 @@ CREATE_TABLE_RE = re.compile(r"create\s+table\s+(?:if\s+not\s+exists\s+)?([a-zA-
 ENABLE_RLS_RE = re.compile(r"alter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?([a-zA-Z0-9_.\"`]+)\s+enable\s+row\s+level\s+security", re.I)
 CREATE_POLICY_RE = re.compile(r"create\s+policy\s+([^;]+);", re.I | re.S)
 POLICY_READONLY_RE = re.compile(r"\bfor\s+select\b", re.I)
-POLICY_OPEN_TRUE_RE = re.compile(r"\b(?:using|with\s+check)\s*\(\s*true\s*\)", re.I)
+# service_role bypasses RLS anyway, so a policy granted only TO service_role opens nothing
+POLICY_SERVICE_ROLE_RE = re.compile(r"\bto\s+service_role\b(?!\s*,)", re.I)
+POLICY_OPEN_TRUE_RE =re.compile(r"\b(?:using|with\s+check)\s*\(\s*true\s*\)", re.I)
 STRIPE_WEBHOOK_HINT_RE = re.compile(
     r"stripe.*webhook|webhook.*stripe|['\"](?:checkout\.session|customer\.subscription|invoice|payment_intent)\.[a-z_.]+['\"]", re.I
 )
@@ -291,8 +293,8 @@ def check_repo(repo_path: Path) -> list[Finding]:
                 tables_with_rls.add(tbl)
             for m in CREATE_POLICY_RE.finditer(text):
                 stmt = m.group(1)
-                if POLICY_OPEN_TRUE_RE.search(stmt) and not POLICY_READONLY_RE.search(stmt):
-                    policy_name = stmt.strip().splitlines()[0].split()[0].strip('"`')
+                if POLICY_OPEN_TRUE_RE.search(stmt) and not POLICY_READONLY_RE.search(stmt) and not POLICY_SERVICE_ROLE_RE.search(stmt):
+                    policy_name = re.match(r'\s*("[^"]+"|\S+)', stmt).group(1).strip('"`')
                     findings.append(
                         Finding(
                             "database",
