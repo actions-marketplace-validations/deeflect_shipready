@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import fnmatch
 import ipaddress
 import json
 import os
@@ -116,28 +117,34 @@ TEXT_EXTS = {
 }
 
 CLIENT_SECRET_ENV_RE = re.compile(
-    r"\b(?:NEXT_PUBLIC_|VITE_|PUBLIC_)[A-Z0-9_]*(?:SECRET|SERVICE_ROLE|PRIVATE_KEY|PASSWORD|DATABASE_URL|API_SECRET)[A-Z0-9_]*\b"
+    r"\b(?:NEXT_PUBLIC_|VITE_|PUBLIC_)[A-Z0-9_]*(?:SECRET|SERVICE_ROLE|PRIVATE_KEY|PASSWORD|DATABASE_URL|API_SECRET|(?:OPENAI|ANTHROPIC|OPENROUTER)_API_KEY|REPLICATE_API_TOKEN|FAL_KEY)[A-Z0-9_]*\b"
 )
 
 HARDCODED_SECRET_PATTERNS = [
-    ("Stripe live secret key", re.compile(r"\bsk_live_[A-Za-z0-9]{16,}\b")),
+    ("Stripe live secret key", re.compile(r"\b[rs]k_live_[A-Za-z0-9]{16,}\b")),
     ("Stripe webhook secret", re.compile(r"\bwhsec_[A-Za-z0-9]{16,}\b")),
     ("OpenAI API key", re.compile(r"\bsk-(?:proj|svcacct)-[A-Za-z0-9_-]{20,}\b")),
     ("Anthropic API key", re.compile(r"\bsk-ant-api\d{2}-[A-Za-z0-9_-]{20,}\b")),
     ("Supabase secret key", re.compile(r"\bsb_secret_[A-Za-z0-9_-]{20,}\b")),
     ("AWS access key ID", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
-    ("GitHub personal access token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b")),
+    ("GitHub personal access token", re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{40,})\b")),
     ("Private key block", re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----")),
 ]
 
 JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.(eyJ[A-Za-z0-9_-]{16,})\.[A-Za-z0-9_-]{10,}\b")
 
 CREATE_TABLE_RE = re.compile(r"create\s+table\s+(?:if\s+not\s+exists\s+)?([a-zA-Z0-9_.\"`]+)", re.I)
-ENABLE_RLS_RE = re.compile(r"alter\s+table\s+(?:only\s+)?([a-zA-Z0-9_.\"`]+)\s+enable\s+row\s+level\s+security", re.I)
+ENABLE_RLS_RE = re.compile(r"alter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?([a-zA-Z0-9_.\"`]+)\s+enable\s+row\s+level\s+security", re.I)
 CREATE_POLICY_RE = re.compile(r"create\s+policy\s+([^;]+);", re.I | re.S)
 POLICY_READONLY_RE = re.compile(r"\bfor\s+select\b", re.I)
+# service_role bypasses RLS anyway, so a policy granted only TO service_role opens nothing
+POLICY_SERVICE_ROLE_RE = re.compile(r"\bto\s+service_role\b(?!\s*,)", re.I)
 POLICY_OPEN_TRUE_RE = re.compile(r"\b(?:using|with\s+check)\s*\(\s*true\s*\)", re.I)
-STRIPE_WEBHOOK_HINT_RE = re.compile(r"stripe.*webhook|webhook.*stripe|checkout\.session\.completed", re.I)
+STRIPE_WEBHOOK_HINT_RE = re.compile(
+    r"stripe.*webhook|webhook.*stripe|['\"](?:checkout\.session|customer\.subscription|invoice|payment_intent)\.[a-z_.]+['\"]", re.I
+)
+# foo.test.ts, foo.spec.js, test_foo.py, foo_test.py; not latest.ts or inspector.ts
+TEST_FILE_RE = re.compile(r"(?:^|[._-])(?:test|spec)s?(?:[._-]|$)")
 STRIPE_SIG_CHECK_RE = re.compile(r"constructEvent|stripe-signature", re.I)
 
 
@@ -182,13 +189,19 @@ def check_repo(repo_path: Path) -> list[Finding]:
 
     # 1. Check for .env files in public/ or committed without .gitignore entry
     gitignore = (repo_path / ".gitignore").read_text(errors="ignore") if (repo_path / ".gitignore").exists() else ""
+    # shortcut: root .gitignore only, negations ignored; nested .gitignore files are not read
+    ignore_pats = [
+        ln.strip().removeprefix("**/").strip("/")
+        for ln in gitignore.splitlines()
+        if ln.strip() and not ln.lstrip().startswith(("#", "!"))
+    ]
     env_files = [p for p in iter_repo_files(repo_path) if p.name == ".env" or p.name.startswith(".env.")]
     real_envs = [p for p in env_files if not p.name.endswith((".example", ".sample", ".template"))]
     for p in real_envs:
         rel = str(p.relative_to(repo_path))
         if rel.startswith("public/"):
             findings.append(Finding("secrets", "FAIL", "Env file inside public/ directory", "Files in public/ are served over HTTP.", rel, rule="SR-WEB-007"))
-        elif ".env" not in gitignore:
+        elif not any(fnmatch.fnmatchcase(p.name, pat) or fnmatch.fnmatchcase(rel, pat) for pat in ignore_pats):
             findings.append(Finding("secrets", "WARN", "Env file present and .env not in .gitignore", "Add .env* to .gitignore and verify it is not tracked by git.", rel, rule="SR-SEC-003"))
 
     # 2. Scan source files
@@ -199,13 +212,16 @@ def check_repo(repo_path: Path) -> list[Finding]:
     tables_with_rls: set[str] = set()
 
     for path in iter_repo_files(repo_path):
-        if path.stat().st_size > 1_000_000:
+        try:
+            if path.stat().st_size > 1_000_000:
+                continue
+            text = path.read_text(errors="ignore")
+        except OSError:  # broken symlink, unreadable file
             continue
         rel = str(path.relative_to(repo_path))
-        text = path.read_text(errors="ignore")
 
         # Skip test files for secret pattern noise unless explicitly .env
-        is_test = "test" in path.name.lower() or "spec" in path.name.lower()
+        is_test = bool(TEST_FILE_RE.search(path.name.lower()))
 
         if not is_test:
             for match in CLIENT_SECRET_ENV_RE.finditer(text):
@@ -270,15 +286,15 @@ def check_repo(repo_path: Path) -> list[Finding]:
         # Supabase / Postgres SQL RLS check
         if path.suffix.lower() == ".sql":
             for m in CREATE_TABLE_RE.finditer(text):
-                tbl = m.group(1).strip('"`').lower().split(".")[-1]
+                tbl = re.sub(r'["`]', "", m.group(1)).lower().split(".")[-1]
                 tables_created[tbl] = (rel, _line(text, m.start()))
             for m in ENABLE_RLS_RE.finditer(text):
-                tbl = m.group(1).strip('"`').lower().split(".")[-1]
+                tbl = re.sub(r'["`]', "", m.group(1)).lower().split(".")[-1]
                 tables_with_rls.add(tbl)
             for m in CREATE_POLICY_RE.finditer(text):
                 stmt = m.group(1)
-                if POLICY_OPEN_TRUE_RE.search(stmt) and not POLICY_READONLY_RE.search(stmt):
-                    policy_name = stmt.strip().splitlines()[0].split()[0].strip('"`')
+                if POLICY_OPEN_TRUE_RE.search(stmt) and not POLICY_READONLY_RE.search(stmt) and not POLICY_SERVICE_ROLE_RE.search(stmt):
+                    policy_name = re.match(r'\s*("[^"]+"|\S+)', stmt).group(1).strip('"`')
                     findings.append(
                         Finding(
                             "database",

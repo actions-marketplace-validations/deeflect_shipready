@@ -151,6 +151,85 @@ class TestVibeCodeSecurityChecklist(unittest.TestCase):
             self.assertEqual(len(warns), 1, warns)
             self.assertIn("dev_all", warns[0].title)
 
+    def test_broken_symlink_does_not_crash(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "dangling.ts").symlink_to(root / "missing.ts")
+            (root / "client.ts").write_text("const k = process.env.NEXT_PUBLIC_STRIPE_SECRET_KEY;\n")
+            self.assertEqual([f.rule for f in check.check_repo(root) if f.rule], ["SR-SEC-001"])
+
+    def test_env_gitignore_uses_patterns_not_substring(self) -> None:
+        cases = {".env*.local\n": [".env"], ".env*\n": [], "/.env\n.env.local\n": [], "# .env\n": [".env", ".env.local"]}
+        for gitignore, expected in cases.items():
+            with self.subTest(gitignore), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                _write(root, {".gitignore": gitignore, ".env": "A=1\n", ".env.local": "A=1\n"})
+                hits = sorted(f.location for f in check.check_repo(root) if f.rule == "SR-SEC-003")
+                self.assertEqual(hits, expected)
+
+    def test_ai_provider_key_in_public_env_var(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "chat.tsx").write_text(
+                "const a = process.env.NEXT_PUBLIC_OPENAI_API_KEY;\n"
+                "const b = import.meta.env.VITE_ANTHROPIC_API_KEY;\n"
+                "const ok = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY + process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;\n"
+            )
+            self.assertEqual([f.line for f in check.check_repo(root) if f.rule == "SR-SEC-001"], [1, 2])
+
+    def test_stripe_webhook_with_subscription_events_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root, {"app/api/webhooks/stripe/route.ts": (
+                "import Stripe from 'stripe';\n"
+                "export async function POST(req: Request) {\n"
+                "  const event = await req.json();\n"
+                "  if (event.type === 'customer.subscription.updated') grantPro(event);\n"
+                "}\n"
+            )})
+            self.assertEqual([f.rule for f in check.check_repo(root) if f.rule], ["SR-PAY-001"])
+
+    def test_only_real_test_files_are_skipped(self) -> None:
+        leak = "const k = process.env.NEXT_PUBLIC_STRIPE_SECRET_KEY;\n"
+        names = ["latest-posts.ts", "inspector.tsx", "contest.ts", "a.test.ts", "b.spec.js", "test_c.py", "d_test.py"]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root, {n: leak for n in names})
+            hits = sorted(f.location for f in check.check_repo(root) if f.rule == "SR-SEC-001")
+        self.assertEqual(hits, ["contest.ts", "inspector.tsx", "latest-posts.ts"])
+
+    def test_quoted_identifiers_and_alter_if_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "dump.sql").write_text(
+                'CREATE TABLE IF NOT EXISTS "public"."profiles" (id int);\n'
+                'ALTER TABLE "public"."profiles" ENABLE ROW LEVEL SECURITY;\n'
+                "CREATE TABLE public.notes (id int);\n"
+                "ALTER TABLE IF EXISTS ONLY public.notes ENABLE ROW LEVEL SECURITY;\n"
+                'CREATE TABLE "public"."invoices" (id int);\n'
+            )
+            hits = [f.title for f in check.check_repo(root) if f.rule == "SR-SUPA-001"]
+        self.assertEqual(hits, ["SQL table `invoices` has no ENABLE ROW LEVEL SECURITY statement"])
+
+    def test_open_policy_name_and_service_role_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "p.sql").write_text(
+                "CREATE TABLE t (id int);\nALTER TABLE t ENABLE ROW LEVEL SECURITY;\n"
+                'create policy "Service role full access" on t for all to service_role using (true) with check (true);\n'
+                'create policy "Anyone can update" on t for update to anon, service_role using (true);\n'
+            )
+            hits = [f.title for f in check.check_repo(root) if f.rule == "SR-SUPA-002"]
+        self.assertEqual(hits, ["Permissive write RLS policy `Anyone can update` uses USING/WITH CHECK (true)"])
+
+    def test_restricted_stripe_key_and_fine_grained_github_pat(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "keys.ts").write_text("const s = 'rk_" + "live_" + "a" * 24 + "';\n")
+            (root / "gh.ts").write_text("const g = 'github_" + "pat_" + "1" * 22 + "_" + "b" * 59 + "';\n")
+            titles = sorted(f.title for f in check.check_repo(root) if f.rule == "SR-SEC-002")
+        self.assertEqual(titles, ["Possible hardcoded GitHub personal access token", "Possible hardcoded Stripe live secret key"])
+
 
 class TestShipReadyRules(unittest.TestCase):
     def test_every_rule_has_a_fixture(self) -> None:

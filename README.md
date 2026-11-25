@@ -1,4 +1,15 @@
+<p align="center">
+  <a href="https://shipmate.agency/rules/">
+    <img src="https://raw.githubusercontent.com/Shipmate-agency/.github/main/assets/shipmate-check-banner.png" alt="ShipReady by Shipmate — Pre-launch security CLI & GitHub Action for Next.js, Supabase, Stripe & AI apps" width="840" />
+  </a>
+</p>
+
 # ShipReady by Shipmate
+
+[![Website](https://img.shields.io/badge/Shipmate-shipmate.agency-1E57A8?style=flat-square)](https://shipmate.agency)
+[![Rule Docs](https://img.shields.io/badge/Rules-14_Checks-11141C?style=flat-square)](https://shipmate.agency/rules/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-11141C?style=flat-square)](./LICENSE)
+[![Org](https://img.shields.io/badge/GitHub-Shipmate--agency-11141C?style=flat-square)](https://github.com/Shipmate-agency)
 
 A pre-launch security checklist and a zero-dependency checker for web apps built fast with **Cursor, Lovable, Bolt, v0, Next.js, Supabase, and Stripe**.
 
@@ -21,10 +32,14 @@ uvx --from vibe-code-security-checklist shipready check .
 python3 check.py check .
 ```
 
+The PyPI package is `vibe-code-security-checklist`. The PyPI package named `shipready` is an unrelated project, so do not `pip install shipready`.
+
+`check` reads files on disk and makes no network calls. Only `url` and `--supabase-url` send requests: read-only GETs to the host you name (following its redirects). Findings name the file, line and key type, never the secret value.
+
 ### Commands
 
 ```bash
-# Scan a local repo for client-exposed secrets, hardcoded AI/Stripe/Supabase keys,
+# Scan a local repo for client-exposed secrets, hardcoded AI/Stripe/Supabase/AWS/GitHub keys,
 # missing RLS, USING (true) write policies, and unverified Stripe webhooks
 shipready check /path/to/your-app
 
@@ -42,7 +57,7 @@ The older flags still work: `vibe-code-check --repo .`, `--url`, `--supabase-url
 
 ### Exit codes
 
-Exit code is `1` if any high-severity finding is detected, `0` otherwise. Change the threshold with `--fail-on high|medium|low|none`.
+Exit code is `1` if any high-severity finding is detected or a check could not run (for example a path that does not exist), `0` otherwise, and `2` for a usage error. Change the threshold with `--fail-on high|medium|low|none`.
 
 ## GitHub Action
 
@@ -59,6 +74,7 @@ on:
 permissions:
   contents: read
   security-events: write   # upload results to the Security tab
+  actions: read            # only needed in private repositories
   pull-requests: write     # only needed with comment: true
 
 jobs:
@@ -81,7 +97,9 @@ Inputs:
 | `fail-on` | `high` | Fail the job on findings at or above this severity: `high`, `medium`, `low` or `none` |
 | `comment` | `false` | Post or update one comment on the pull request with the findings |
 
-Results are uploaded even when the check fails the job.
+Output: `sarif-file`, the path of the SARIF file that was uploaded.
+
+Results are uploaded even when the check fails the job. Uploading to the Security tab is free for public repositories; a private repository needs GitHub Code Security (Advanced Security) enabled, or the upload step fails the job.
 
 ## Rules
 
