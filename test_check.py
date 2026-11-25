@@ -151,6 +151,13 @@ class TestVibeCodeSecurityChecklist(unittest.TestCase):
             self.assertEqual(len(warns), 1, warns)
             self.assertIn("dev_all", warns[0].title)
 
+    def test_broken_symlink_does_not_crash(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "dangling.ts").symlink_to(root / "missing.ts")
+            (root / "client.ts").write_text("const k = process.env.NEXT_PUBLIC_STRIPE_SECRET_KEY;\n")
+            self.assertEqual([f.rule for f in check.check_repo(root) if f.rule], ["SR-SEC-001"])
+
 
 class TestShipReadyRules(unittest.TestCase):
     def test_every_rule_has_a_fixture(self) -> None:

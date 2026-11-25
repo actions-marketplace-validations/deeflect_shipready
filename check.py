@@ -199,10 +199,13 @@ def check_repo(repo_path: Path) -> list[Finding]:
     tables_with_rls: set[str] = set()
 
     for path in iter_repo_files(repo_path):
-        if path.stat().st_size > 1_000_000:
+        try:
+            if path.stat().st_size > 1_000_000:
+                continue
+            text = path.read_text(errors="ignore")
+        except OSError:  # broken symlink, unreadable file
             continue
         rel = str(path.relative_to(repo_path))
-        text = path.read_text(errors="ignore")
 
         # Skip test files for secret pattern noise unless explicitly .env
         is_test = "test" in path.name.lower() or "spec" in path.name.lower()
