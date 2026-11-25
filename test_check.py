@@ -222,6 +222,14 @@ class TestVibeCodeSecurityChecklist(unittest.TestCase):
             hits = [f.title for f in check.check_repo(root) if f.rule == "SR-SUPA-002"]
         self.assertEqual(hits, ["Permissive write RLS policy `Anyone can update` uses USING/WITH CHECK (true)"])
 
+    def test_restricted_stripe_key_and_fine_grained_github_pat(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "keys.ts").write_text("const s = 'rk_" + "live_" + "a" * 24 + "';\n")
+            (root / "gh.ts").write_text("const g = 'github_" + "pat_" + "1" * 22 + "_" + "b" * 59 + "';\n")
+            titles = sorted(f.title for f in check.check_repo(root) if f.rule == "SR-SEC-002")
+        self.assertEqual(titles, ["Possible hardcoded GitHub personal access token", "Possible hardcoded Stripe live secret key"])
+
 
 class TestShipReadyRules(unittest.TestCase):
     def test_every_rule_has_a_fixture(self) -> None:

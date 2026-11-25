@@ -121,13 +121,13 @@ CLIENT_SECRET_ENV_RE = re.compile(
 )
 
 HARDCODED_SECRET_PATTERNS = [
-    ("Stripe live secret key", re.compile(r"\bsk_live_[A-Za-z0-9]{16,}\b")),
+    ("Stripe live secret key", re.compile(r"\b[rs]k_live_[A-Za-z0-9]{16,}\b")),
     ("Stripe webhook secret", re.compile(r"\bwhsec_[A-Za-z0-9]{16,}\b")),
     ("OpenAI API key", re.compile(r"\bsk-(?:proj|svcacct)-[A-Za-z0-9_-]{20,}\b")),
     ("Anthropic API key", re.compile(r"\bsk-ant-api\d{2}-[A-Za-z0-9_-]{20,}\b")),
     ("Supabase secret key", re.compile(r"\bsb_secret_[A-Za-z0-9_-]{20,}\b")),
     ("AWS access key ID", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
-    ("GitHub personal access token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b")),
+    ("GitHub personal access token", re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{40,})\b")),
     ("Private key block", re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----")),
 ]
 
