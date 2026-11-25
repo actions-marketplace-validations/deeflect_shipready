@@ -139,13 +139,13 @@ CREATE_POLICY_RE = re.compile(r"create\s+policy\s+([^;]+);", re.I | re.S)
 POLICY_READONLY_RE = re.compile(r"\bfor\s+select\b", re.I)
 # service_role bypasses RLS anyway, so a policy granted only TO service_role opens nothing
 POLICY_SERVICE_ROLE_RE = re.compile(r"\bto\s+service_role\b(?!\s*,)", re.I)
-POLICY_OPEN_TRUE_RE =re.compile(r"\b(?:using|with\s+check)\s*\(\s*true\s*\)", re.I)
+POLICY_OPEN_TRUE_RE = re.compile(r"\b(?:using|with\s+check)\s*\(\s*true\s*\)", re.I)
 STRIPE_WEBHOOK_HINT_RE = re.compile(
     r"stripe.*webhook|webhook.*stripe|['\"](?:checkout\.session|customer\.subscription|invoice|payment_intent)\.[a-z_.]+['\"]", re.I
 )
 # foo.test.ts, foo.spec.js, test_foo.py, foo_test.py; not latest.ts or inspector.ts
 TEST_FILE_RE = re.compile(r"(?:^|[._-])(?:test|spec)s?(?:[._-]|$)")
-STRIPE_SIG_CHECK_RE =re.compile(r"constructEvent|stripe-signature", re.I)
+STRIPE_SIG_CHECK_RE = re.compile(r"constructEvent|stripe-signature", re.I)
 
 
 def _has_service_role_jwt(text: str) -> int:
