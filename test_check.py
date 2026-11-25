@@ -158,6 +158,15 @@ class TestVibeCodeSecurityChecklist(unittest.TestCase):
             (root / "client.ts").write_text("const k = process.env.NEXT_PUBLIC_STRIPE_SECRET_KEY;\n")
             self.assertEqual([f.rule for f in check.check_repo(root) if f.rule], ["SR-SEC-001"])
 
+    def test_env_gitignore_uses_patterns_not_substring(self) -> None:
+        cases = {".env*.local\n": [".env"], ".env*\n": [], "/.env\n.env.local\n": [], "# .env\n": [".env", ".env.local"]}
+        for gitignore, expected in cases.items():
+            with self.subTest(gitignore), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                _write(root, {".gitignore": gitignore, ".env": "A=1\n", ".env.local": "A=1\n"})
+                hits = sorted(f.location for f in check.check_repo(root) if f.rule == "SR-SEC-003")
+                self.assertEqual(hits, expected)
+
 
 class TestShipReadyRules(unittest.TestCase):
     def test_every_rule_has_a_fixture(self) -> None:

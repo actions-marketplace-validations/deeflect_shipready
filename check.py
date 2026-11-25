@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import fnmatch
 import ipaddress
 import json
 import os
@@ -182,13 +183,19 @@ def check_repo(repo_path: Path) -> list[Finding]:
 
     # 1. Check for .env files in public/ or committed without .gitignore entry
     gitignore = (repo_path / ".gitignore").read_text(errors="ignore") if (repo_path / ".gitignore").exists() else ""
+    # shortcut: root .gitignore only, negations ignored; nested .gitignore files are not read
+    ignore_pats = [
+        ln.strip().removeprefix("**/").strip("/")
+        for ln in gitignore.splitlines()
+        if ln.strip() and not ln.lstrip().startswith(("#", "!"))
+    ]
     env_files = [p for p in iter_repo_files(repo_path) if p.name == ".env" or p.name.startswith(".env.")]
     real_envs = [p for p in env_files if not p.name.endswith((".example", ".sample", ".template"))]
     for p in real_envs:
         rel = str(p.relative_to(repo_path))
         if rel.startswith("public/"):
             findings.append(Finding("secrets", "FAIL", "Env file inside public/ directory", "Files in public/ are served over HTTP.", rel, rule="SR-WEB-007"))
-        elif ".env" not in gitignore:
+        elif not any(fnmatch.fnmatchcase(p.name, pat) or fnmatch.fnmatchcase(rel, pat) for pat in ignore_pats):
             findings.append(Finding("secrets", "WARN", "Env file present and .env not in .gitignore", "Add .env* to .gitignore and verify it is not tracked by git.", rel, rule="SR-SEC-003"))
 
     # 2. Scan source files
