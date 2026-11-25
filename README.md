@@ -82,7 +82,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: Shipmate-agency/shipready@v0.2.0
+      - uses: Shipmate-agency/shipready@v0.2.1
         with:
           path: .
           fail-on: high

@@ -1,6 +1,6 @@
 {
   "name": "@shipmate-agency/shipready",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "ShipReady by Shipmate: zero-dependency pre-launch security check for Next.js, Supabase and Stripe apps.",
   "bin": {
     "shipready": "npm/shipready.js"
