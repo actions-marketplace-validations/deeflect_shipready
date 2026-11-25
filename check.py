@@ -141,7 +141,9 @@ POLICY_OPEN_TRUE_RE = re.compile(r"\b(?:using|with\s+check)\s*\(\s*true\s*\)", r
 STRIPE_WEBHOOK_HINT_RE = re.compile(
     r"stripe.*webhook|webhook.*stripe|['\"](?:checkout\.session|customer\.subscription|invoice|payment_intent)\.[a-z_.]+['\"]", re.I
 )
-STRIPE_SIG_CHECK_RE = re.compile(r"constructEvent|stripe-signature", re.I)
+# foo.test.ts, foo.spec.js, test_foo.py, foo_test.py; not latest.ts or inspector.ts
+TEST_FILE_RE = re.compile(r"(?:^|[._-])(?:test|spec)s?(?:[._-]|$)")
+STRIPE_SIG_CHECK_RE =re.compile(r"constructEvent|stripe-signature", re.I)
 
 
 def _has_service_role_jwt(text: str) -> int:
@@ -217,7 +219,7 @@ def check_repo(repo_path: Path) -> list[Finding]:
         rel = str(path.relative_to(repo_path))
 
         # Skip test files for secret pattern noise unless explicitly .env
-        is_test = "test" in path.name.lower() or "spec" in path.name.lower()
+        is_test = bool(TEST_FILE_RE.search(path.name.lower()))
 
         if not is_test:
             for match in CLIENT_SECRET_ENV_RE.finditer(text):

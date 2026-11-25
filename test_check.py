@@ -189,6 +189,15 @@ class TestVibeCodeSecurityChecklist(unittest.TestCase):
             )})
             self.assertEqual([f.rule for f in check.check_repo(root) if f.rule], ["SR-PAY-001"])
 
+    def test_only_real_test_files_are_skipped(self) -> None:
+        leak = "const k = process.env.NEXT_PUBLIC_STRIPE_SECRET_KEY;\n"
+        names = ["latest-posts.ts", "inspector.tsx", "contest.ts", "a.test.ts", "b.spec.js", "test_c.py", "d_test.py"]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root, {n: leak for n in names})
+            hits = sorted(f.location for f in check.check_repo(root) if f.rule == "SR-SEC-001")
+        self.assertEqual(hits, ["contest.ts", "inspector.tsx", "latest-posts.ts"])
+
 
 class TestShipReadyRules(unittest.TestCase):
     def test_every_rule_has_a_fixture(self) -> None:
