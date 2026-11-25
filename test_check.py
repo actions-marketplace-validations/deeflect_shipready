@@ -177,6 +177,18 @@ class TestVibeCodeSecurityChecklist(unittest.TestCase):
             )
             self.assertEqual([f.line for f in check.check_repo(root) if f.rule == "SR-SEC-001"], [1, 2])
 
+    def test_stripe_webhook_with_subscription_events_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root, {"app/api/webhooks/stripe/route.ts": (
+                "import Stripe from 'stripe';\n"
+                "export async function POST(req: Request) {\n"
+                "  const event = await req.json();\n"
+                "  if (event.type === 'customer.subscription.updated') grantPro(event);\n"
+                "}\n"
+            )})
+            self.assertEqual([f.rule for f in check.check_repo(root) if f.rule], ["SR-PAY-001"])
+
 
 class TestShipReadyRules(unittest.TestCase):
     def test_every_rule_has_a_fixture(self) -> None:

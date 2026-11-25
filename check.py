@@ -138,7 +138,9 @@ ENABLE_RLS_RE = re.compile(r"alter\s+table\s+(?:only\s+)?([a-zA-Z0-9_.\"`]+)\s+e
 CREATE_POLICY_RE = re.compile(r"create\s+policy\s+([^;]+);", re.I | re.S)
 POLICY_READONLY_RE = re.compile(r"\bfor\s+select\b", re.I)
 POLICY_OPEN_TRUE_RE = re.compile(r"\b(?:using|with\s+check)\s*\(\s*true\s*\)", re.I)
-STRIPE_WEBHOOK_HINT_RE = re.compile(r"stripe.*webhook|webhook.*stripe|checkout\.session\.completed", re.I)
+STRIPE_WEBHOOK_HINT_RE = re.compile(
+    r"stripe.*webhook|webhook.*stripe|['\"](?:checkout\.session|customer\.subscription|invoice|payment_intent)\.[a-z_.]+['\"]", re.I
+)
 STRIPE_SIG_CHECK_RE = re.compile(r"constructEvent|stripe-signature", re.I)
 
 
