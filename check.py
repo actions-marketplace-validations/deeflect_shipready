@@ -28,7 +28,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 RULES_BASE_URL = "https://shipmate.agency/rules/"
 LOCKDOWN_LINE = "Want a person to fix these in one PR? https://shipmate.agency/lockdown"
 
